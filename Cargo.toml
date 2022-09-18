@@ -1,0 +1,19 @@
+[package]
+name = "bevy_diagnostic_visualizer"
+version = "0.1.0"
+edition = "2021"
+categories = ["development-tools::debugging", "development-tools::profiling", "game-development", "visualization"]
+description = "Visualizations for Bevy game engine diagnostics"
+exclude = ["assets/", ".github/"]
+keywords = ["bevy", "diagnostic", "graph", "chart", "gamedev"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/sagan-software/bevy_diagnostic_visualizer"
+
+[dependencies]
+bevy = { version = "0.8.1", default-features = false }
+bevy_egui = { version = "0.16.0", default-features = false }
+
+[dev-dependencies]
+bevy = { version = "0.8.1", default-features = true }
+bevy_egui = { version = "0.16.0", default-features = true }
