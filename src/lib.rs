@@ -41,6 +41,7 @@ use bevy_egui::{
 };
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    sync::Arc,
     time::Duration,
 };
 
@@ -62,7 +63,6 @@ struct Style {
 
 #[derive(Clone)]
 enum DiagnosticIds {
-    All,
     Include(HashSet<DiagnosticId>),
     Exclude(HashSet<DiagnosticId>),
 }
@@ -70,7 +70,6 @@ enum DiagnosticIds {
 impl DiagnosticIds {
     fn should_include(&self, diagnostic_id: &DiagnosticId) -> bool {
         match self {
-            Self::All => true,
             Self::Include(ids) => ids.contains(diagnostic_id),
             Self::Exclude(ids) => !ids.contains(diagnostic_id),
         }
@@ -81,7 +80,11 @@ impl Default for DiagnosticVisualizerPlugin {
     fn default() -> Self {
         Self {
             wait_duration: Duration::from_millis(20),
-            filter: DiagnosticIds::All,
+            filter: DiagnosticIds::Exclude(
+                vec![bevy::diagnostic::FrameTimeDiagnosticsPlugin::FRAME_COUNT]
+                    .into_iter()
+                    .collect(),
+            ),
             style: Style::default(),
         }
     }
@@ -114,7 +117,7 @@ impl DiagnosticVisualizerPlugin {
             DiagnosticIds::Include(hash_set) => {
                 hash_set.insert(diagnostic_id);
             }
-            filter => {
+            filter @ DiagnosticIds::Exclude(_) => {
                 let mut hash_set = HashSet::new();
                 hash_set.insert(diagnostic_id);
                 *filter = DiagnosticIds::Include(hash_set);
@@ -130,7 +133,7 @@ impl DiagnosticVisualizerPlugin {
             DiagnosticIds::Exclude(hash_set) => {
                 hash_set.insert(diagnostic_id);
             }
-            filter => {
+            filter @ DiagnosticIds::Include(_) => {
                 let mut hash_set = HashSet::new();
                 hash_set.insert(diagnostic_id);
                 *filter = DiagnosticIds::Exclude(hash_set);
@@ -143,9 +146,62 @@ impl DiagnosticVisualizerPlugin {
 struct State {
     timer: Timer,
     filter: DiagnosticIds,
-    measurements: HashMap<DiagnosticId, VecDeque<f64>>,
+    default_formatter: Arc<dyn Formatter>,
+    available_formatters: Vec<AvailableFormatter>,
+    diagnostic_states: HashMap<DiagnosticId, DiagnosticState>,
     is_open: bool,
     style: Style,
+}
+
+fn find_formatter(
+    available_formatters: &[AvailableFormatter],
+    default_formatter: &Arc<dyn Formatter>,
+    diagnostic: &Diagnostic,
+) -> Arc<dyn Formatter> {
+    available_formatters
+        .iter()
+        .find(|f| f.is_match(diagnostic))
+        .map_or_else(|| default_formatter.clone(), |f| f.formatter.clone())
+}
+
+fn new_state(
+    available_formatters: &[AvailableFormatter],
+    default_formatter: &Arc<dyn Formatter>,
+    diagnostic: &Diagnostic,
+) -> DiagnosticState {
+    DiagnosticState {
+        formatter: find_formatter(available_formatters, default_formatter, diagnostic),
+        measurements: VecDeque::default(),
+    }
+}
+
+struct DiagnosticState {
+    formatter: Arc<dyn Formatter>,
+    measurements: VecDeque<f64>,
+}
+
+trait Formatter: (Fn(f64) -> String) + Send + Sync {}
+impl<T> Formatter for T where T: (Fn(f64) -> String) + Send + Sync {}
+trait Matcher: (Fn(&Diagnostic) -> bool) + Send + Sync {}
+impl<T> Matcher for T where T: (Fn(&Diagnostic) -> bool) + Send + Sync {}
+
+fn default_formatter(value: f64) -> String {
+    format!("{:.0}", value)
+}
+
+fn format_secs_as_ms(value: f64) -> String {
+    format!("{:.1} ms", value * 1_000.0)
+}
+
+struct AvailableFormatter {
+    matchers: Vec<Box<dyn Matcher>>,
+    formatter: Arc<dyn Formatter>,
+}
+
+impl AvailableFormatter {
+    fn is_match(&self, diagnostic: &Diagnostic) -> bool {
+        self.matchers.iter().any(|m| (m)(diagnostic))
+    }
 }
 
 impl Plugin for DiagnosticVisualizerPlugin {
@@ -157,7 +213,14 @@ impl Plugin for DiagnosticVisualizerPlugin {
         app.insert_resource(State {
             timer: Timer::new(self.wait_duration, true),
             filter: self.filter.clone(),
-            measurements: HashMap::default(),
+            default_formatter: Arc::new(default_formatter),
+            available_formatters: vec![AvailableFormatter {
+                matchers: vec![Box::new(|d: &Diagnostic| {
+                    d.id == bevy::diagnostic::FrameTimeDiagnosticsPlugin::FRAME_TIME
+                })],
+                formatter: Arc::new(format_secs_as_ms),
+            }],
+            diagnostic_states: HashMap::default(),
             is_open: true,
             style: self.style.clone(),
         })
@@ -174,7 +237,9 @@ fn plot_diagnostics_system(
 ) {
     let State {
         is_open,
-        measurements,
+        diagnostic_states,
+        available_formatters,
+        default_formatter,
         filter,
         style,
         timer,
@@ -198,41 +263,46 @@ fn plot_diagnostics_system(
                 .filter(|diagnostic| diagnostic.is_enabled)
                 .filter(|diagnostic| filter.should_include(&diagnostic.id))
                 .for_each(|diagnostic| {
+                    let state = diagnostic_states.entry(diagnostic.id).or_insert_with(|| {
+                        new_state(available_formatters, default_formatter, diagnostic)
+                    });
                     if is_tick_finished {
-                        track_diagnostic(measurements, diagnostic);
+                        track_diagnostic(diagnostic, state);
                     }
-                    plot_diagnostic(measurements, diagnostic, ui, style);
+                    plot_diagnostic(diagnostic, state, ui, style);
                 });
         });
 }
 
-fn track_diagnostic(
-    measurements: &mut HashMap<DiagnosticId, VecDeque<f64>>,
-    diagnostic: &Diagnostic,
-) {
-    let measurements = measurements.entry(diagnostic.id).or_default();
+fn track_diagnostic(diagnostic: &Diagnostic, state: &mut DiagnosticState) {
     if let Some(last) = diagnostic.average() {
-        measurements.push_back(last);
-        if measurements.len() > 100 {
-            measurements.pop_front();
+        state.measurements.push_back(last);
+        if state.measurements.len() > 100 {
+            state.measurements.pop_front();
         }
+        state.measurements.make_contiguous();
     }
-    measurements.make_contiguous();
 }
 
 fn plot_diagnostic(
-    measurements: &mut HashMap<DiagnosticId, VecDeque<f64>>,
     diagnostic: &Diagnostic,
+    state: &mut DiagnosticState,
     ui: &mut Ui,
     style: &Style,
 ) {
-    let values = measurements.entry(diagnostic.id).or_default().as_slices().0;
     CollapsingHeader::new(diagnostic.name.as_ref())
         .default_open(true)
-        .show(ui, |ui| show_graph(ui, style, values));
+        .show(ui, |ui| show_graph(ui, style, state));
 }
 
-fn show_graph(ui: &mut Ui, style: &Style, values: &[f64]) {
+fn show_graph(ui: &mut Ui, style: &Style, state: &DiagnosticState) {
+    let DiagnosticState {
+        formatter,
+        measurements,
+    } = state;
+
+    let values = measurements.as_slices().0;
+
     if values.is_empty() {
         return;
     }
@@ -240,12 +310,12 @@ fn show_graph(ui: &mut Ui, style: &Style, values: &[f64]) {
     ui.vertical(|ui| {
         let last_value = values.last().unwrap();
 
-        let min = 0.0;
+        let min = values.iter().copied().fold(f64::INFINITY, f64::min);
         let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
 
         let spacing_x = ui.spacing().item_spacing.x;
 
-        let last_text: WidgetText = format!("{:.2}", last_value).into();
+        let last_text: WidgetText = formatter(*last_value).into();
         let galley = last_text.into_galley(ui, Some(false), f32::INFINITY, TextStyle::Button);
         let (outer_rect, _) = ui.allocate_exact_size(
             Vec2::new(style.width + galley.size().x + spacing_x, style.height),
@@ -274,11 +344,7 @@ fn show_graph(ui: &mut Ui, style: &Style, values: &[f64]) {
             .enumerate()
             .map(|(i, value)| {
                 let x = remap(i as f32, 0.0..=size as f32, 0.0..=style.width);
-                let y = remap(
-                    (*value) as f32,
-                    (min as f32)..=(max as f32),
-                    0.0..=style.height,
-                );
+                let y = remap((*value) as f32, 0.0..=(max as f32), 0.0..=style.height);
 
                 pos2(x + init_point.x, init_point.y - y)
             })
@@ -287,8 +353,9 @@ fn show_graph(ui: &mut Ui, style: &Style, values: &[f64]) {
         let path = PathShape::line(points, style.line_stroke);
         ui.painter().add(path);
 
+        // Max value
         {
-            let text: WidgetText = format!("{:.0}", max).into();
+            let text: WidgetText = format!("max: {}", formatter(max)).into();
             let galley = text.into_galley(ui, Some(false), f32::INFINITY, TextStyle::Button);
             let text_pos =
                 rect.left_top() + Vec2::new(0.0, galley.size().y / 2.) + vec2(spacing_x, 0.0);
@@ -298,8 +365,10 @@ fn show_graph(ui: &mut Ui, style: &Style, values: &[f64]) {
                 style.text_color,
             );
         }
+
+        // Min value
         {
-            let text: WidgetText = format!("{:.0}", min).into();
+            let text: WidgetText = format!("min: {}", formatter(min)).into();
             let galley = text.into_galley(ui, Some(false), f32::INFINITY, TextStyle::Button);
             let text_pos =
                 rect.left_bottom() - Vec2::new(0.0, galley.size().y * 1.5) + vec2(spacing_x, 0.0);

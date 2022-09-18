@@ -7,6 +7,8 @@
 
 This crate provides a plugin for visualizing Bevy game engine diagnostics.
 
+![screenshot](assets/demo.gif)
+
 ## Usage
 
 ```rust
@@ -21,6 +23,12 @@ fn main() {
         .add_plugin(DiagnosticVisualizerPlugin::default())
         .run();
 }
+```
+
+## Example
+
+```
+cargo run --example many_foxes
 ```
 
 ## License

@@ -17,3 +17,7 @@ bevy_egui = { version = "0.16.0", default-features = false }
 [dev-dependencies]
 bevy = { version = "0.8.1", default-features = true }
 bevy_egui = { version = "0.16.0", default-features = true }
+
+# Enable high optimizations for dependencies (incl. Bevy), but not for our code:
+[profile.dev.package."*"]
+opt-level = 3
