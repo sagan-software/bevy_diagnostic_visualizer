@@ -27,19 +27,15 @@
 #![doc = include_str!("../examples/minimal.rs")]
 //! ```
 
+#[cfg(feature = "bevy_egui")]
+mod egui;
+
 use bevy::{
     diagnostic::{Diagnostic, DiagnosticId, Diagnostics},
     prelude::*,
 };
-use bevy_egui::{
-    egui::{
-        epaint::{PathShape, RectShape},
-        pos2, remap, vec2, CollapsingHeader, Color32, Rect, Rgba, Rounding, Sense, Shape, Stroke,
-        TextStyle, Ui, Vec2, WidgetText, Window,
-    },
-    EguiContext, EguiPlugin,
-};
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
     time::Duration,
@@ -49,16 +45,6 @@ use std::{
 pub struct DiagnosticVisualizerPlugin {
     wait_duration: Duration,
     filter: DiagnosticIds,
-    style: Style,
-}
-
-#[derive(Clone)]
-struct Style {
-    text_color: Color32,
-    rectangle_stroke: Stroke,
-    line_stroke: Stroke,
-    width: f32,
-    height: f32,
 }
 
 #[derive(Clone)]
@@ -85,19 +71,6 @@ impl Default for DiagnosticVisualizerPlugin {
                     .into_iter()
                     .collect(),
             ),
-            style: Style::default(),
-        }
-    }
-}
-
-impl Default for Style {
-    fn default() -> Self {
-        Self {
-            text_color: Color32::WHITE,
-            rectangle_stroke: Stroke::new(1., Color32::WHITE),
-            line_stroke: Stroke::new(1., Color32::WHITE),
-            width: 200.,
-            height: 100.,
         }
     }
 }
@@ -143,14 +116,12 @@ impl DiagnosticVisualizerPlugin {
     }
 }
 
-struct State {
+struct DiagnosticVisualizerState {
     timer: Timer,
     filter: DiagnosticIds,
     default_formatter: Arc<dyn Formatter>,
     available_formatters: Vec<AvailableFormatter>,
     diagnostic_states: HashMap<DiagnosticId, DiagnosticState>,
-    is_open: bool,
-    style: Style,
 }
 
 fn find_formatter(
@@ -170,12 +141,14 @@ fn new_state(
     diagnostic: &Diagnostic,
 ) -> DiagnosticState {
     DiagnosticState {
+        name: diagnostic.name.clone(),
         formatter: find_formatter(available_formatters, default_formatter, diagnostic),
         measurements: VecDeque::default(),
     }
 }
 
 struct DiagnosticState {
+    name: Cow<'static, str>,
     formatter: Arc<dyn Formatter>,
     measurements: VecDeque<f64>,
 }
@@ -206,11 +179,7 @@ impl AvailableFormatter {
 
 impl Plugin for DiagnosticVisualizerPlugin {
     fn build(&self, app: &mut App) {
-        if !app.world.contains_resource::<EguiContext>() {
-            app.add_plugin(EguiPlugin);
-        }
-
-        app.insert_resource(State {
+        app.insert_resource(DiagnosticVisualizerState {
             timer: Timer::new(self.wait_duration, true),
             filter: self.filter.clone(),
             default_formatter: Arc::new(default_formatter),
@@ -221,57 +190,43 @@ impl Plugin for DiagnosticVisualizerPlugin {
                 formatter: Arc::new(format_secs_as_ms),
             }],
             diagnostic_states: HashMap::default(),
-            is_open: true,
-            style: self.style.clone(),
         })
-        .add_system_to_stage(CoreStage::PostUpdate, plot_diagnostics_system);
+        .add_system_to_stage(
+            CoreStage::PreUpdate,
+            update_diagnostic_visualizer_state_system,
+        );
+        #[cfg(feature = "bevy_egui")]
+        app.add_plugin(crate::egui::DiagnosticVisualizerEguiPlugin);
     }
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn plot_diagnostics_system(
-    mut state: ResMut<'_, State>,
+fn update_diagnostic_visualizer_state_system(
+    mut state: ResMut<'_, DiagnosticVisualizerState>,
     time: Res<'_, Time>,
     diagnostics: Res<'_, Diagnostics>,
-    mut egui_context: ResMut<'_, EguiContext>,
 ) {
-    let State {
-        is_open,
+    let DiagnosticVisualizerState {
         diagnostic_states,
         available_formatters,
         default_formatter,
         filter,
-        style,
         timer,
         ..
     } = state.as_mut();
-
-    if !*is_open {
-        return;
-    }
-
     let is_tick_finished = timer.tick(time.delta()).finished();
-
-    Window::new("Diagnostics")
-        .open(is_open)
-        .default_width(250.0)
-        .default_height(diagnostics.iter().count() as f32 * 170.0)
-        .vscroll(true)
-        .show(egui_context.ctx_mut(), |ui| {
-            diagnostics
-                .iter()
-                .filter(|diagnostic| diagnostic.is_enabled)
-                .filter(|diagnostic| filter.should_include(&diagnostic.id))
-                .for_each(|diagnostic| {
-                    let state = diagnostic_states.entry(diagnostic.id).or_insert_with(|| {
-                        new_state(available_formatters, default_formatter, diagnostic)
-                    });
-                    if is_tick_finished {
-                        track_diagnostic(diagnostic, state);
-                    }
-                    plot_diagnostic(diagnostic, state, ui, style);
+    if is_tick_finished {
+        diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.is_enabled)
+            .filter(|diagnostic| filter.should_include(&diagnostic.id))
+            .for_each(|diagnostic| {
+                let state = diagnostic_states.entry(diagnostic.id).or_insert_with(|| {
+                    new_state(available_formatters, default_formatter, diagnostic)
                 });
-        });
+                track_diagnostic(diagnostic, state);
+            });
+    }
 }
 
 fn track_diagnostic(diagnostic: &Diagnostic, state: &mut DiagnosticState) {
@@ -282,101 +237,4 @@ fn track_diagnostic(diagnostic: &Diagnostic, state: &mut DiagnosticState) {
         }
         state.measurements.make_contiguous();
     }
-}
-
-fn plot_diagnostic(
-    diagnostic: &Diagnostic,
-    state: &mut DiagnosticState,
-    ui: &mut Ui,
-    style: &Style,
-) {
-    CollapsingHeader::new(diagnostic.name.as_ref())
-        .default_open(true)
-        .show(ui, |ui| show_graph(ui, style, state));
-}
-
-fn show_graph(ui: &mut Ui, style: &Style, state: &DiagnosticState) {
-    let DiagnosticState {
-        formatter,
-        measurements,
-    } = state;
-
-    let values = measurements.as_slices().0;
-
-    if values.is_empty() {
-        return;
-    }
-
-    ui.vertical(|ui| {
-        let last_value = values.last().unwrap();
-
-        let min = values.iter().copied().fold(f64::INFINITY, f64::min);
-        let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-
-        let spacing_x = ui.spacing().item_spacing.x;
-
-        let last_text: WidgetText = formatter(*last_value).into();
-        let galley = last_text.into_galley(ui, Some(false), f32::INFINITY, TextStyle::Button);
-        let (outer_rect, _) = ui.allocate_exact_size(
-            Vec2::new(style.width + galley.size().x + spacing_x, style.height),
-            Sense::hover(),
-        );
-        let rect = Rect::from_min_size(outer_rect.left_top(), vec2(style.width, style.height));
-        let text_pos = rect.right_center() + vec2(spacing_x / 2.0, -galley.size().y / 2.);
-        galley.paint_with_fallback_color(
-            &ui.painter().with_clip_rect(outer_rect),
-            text_pos,
-            style.text_color,
-        );
-
-        let body = Shape::Rect(RectShape {
-            rect,
-            rounding: Rounding::none(),
-            fill: Rgba::TRANSPARENT.into(),
-            stroke: style.rectangle_stroke,
-        });
-        ui.painter().add(body);
-        let init_point = rect.left_bottom();
-
-        let size = values.len();
-        let points = values
-            .iter()
-            .enumerate()
-            .map(|(i, value)| {
-                let x = remap(i as f32, 0.0..=size as f32, 0.0..=style.width);
-                let y = remap((*value) as f32, 0.0..=(max as f32), 0.0..=style.height);
-
-                pos2(x + init_point.x, init_point.y - y)
-            })
-            .collect();
-
-        let path = PathShape::line(points, style.line_stroke);
-        ui.painter().add(path);
-
-        // Max value
-        {
-            let text: WidgetText = format!("max: {}", formatter(max)).into();
-            let galley = text.into_galley(ui, Some(false), f32::INFINITY, TextStyle::Button);
-            let text_pos =
-                rect.left_top() + Vec2::new(0.0, galley.size().y / 2.) + vec2(spacing_x, 0.0);
-            galley.paint_with_fallback_color(
-                &ui.painter().with_clip_rect(rect),
-                text_pos,
-                style.text_color,
-            );
-        }
-
-        // Min value
-        {
-            let text: WidgetText = format!("min: {}", formatter(min)).into();
-            let galley = text.into_galley(ui, Some(false), f32::INFINITY, TextStyle::Button);
-            let text_pos =
-                rect.left_bottom() - Vec2::new(0.0, galley.size().y * 1.5) + vec2(spacing_x, 0.0);
-            galley.paint_with_fallback_color(
-                &ui.painter().with_clip_rect(rect),
-                text_pos,
-                style.text_color,
-            );
-        }
-    });
 }

@@ -12,7 +12,10 @@ repository = "https://github.com/sagan-software/bevy_diagnostic_visualizer"
 
 [dependencies]
 bevy = { version = "0.8.1", default-features = false }
-bevy_egui = { version = "0.16.0", default-features = false }
+bevy_egui = { version = "0.16.0", default-features = false, optional = true }
+
+[features]
+default = ["bevy_egui"]
 
 [dev-dependencies]
 bevy = { version = "0.8.1", default-features = true }
