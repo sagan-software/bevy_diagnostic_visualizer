@@ -37,7 +37,6 @@ use bevy::{
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet, VecDeque},
-    sync::Arc,
     time::Duration,
 };
 
@@ -119,61 +118,22 @@ impl DiagnosticVisualizerPlugin {
 struct DiagnosticVisualizerState {
     timer: Timer,
     filter: DiagnosticIds,
-    default_formatter: Arc<dyn Formatter>,
-    available_formatters: Vec<AvailableFormatter>,
     diagnostic_states: HashMap<DiagnosticId, DiagnosticState>,
-}
-
-fn find_formatter(
-    available_formatters: &[AvailableFormatter],
-    default_formatter: &Arc<dyn Formatter>,
-    diagnostic: &Diagnostic,
-) -> Arc<dyn Formatter> {
-    available_formatters
-        .iter()
-        .find(|f| f.is_match(diagnostic))
-        .map_or_else(|| default_formatter.clone(), |f| f.formatter.clone())
-}
-
-fn new_state(
-    available_formatters: &[AvailableFormatter],
-    default_formatter: &Arc<dyn Formatter>,
-    diagnostic: &Diagnostic,
-) -> DiagnosticState {
-    DiagnosticState {
-        name: diagnostic.name.clone(),
-        formatter: find_formatter(available_formatters, default_formatter, diagnostic),
-        measurements: VecDeque::default(),
-    }
 }
 
 struct DiagnosticState {
     name: Cow<'static, str>,
-    formatter: Arc<dyn Formatter>,
+    suffix: Cow<'static, str>,
     measurements: VecDeque<f64>,
 }
 
-trait Formatter: (Fn(f64) -> String) + Send + Sync {}
-impl<T> Formatter for T where T: (Fn(f64) -> String) + Send + Sync {}
-trait Matcher: (Fn(&Diagnostic) -> bool) + Send + Sync {}
-impl<T> Matcher for T where T: (Fn(&Diagnostic) -> bool) + Send + Sync {}
-
-fn default_formatter(value: f64) -> String {
-    format!("{:.0}", value)
-}
-
-fn format_secs_as_ms(value: f64) -> String {
-    format!("{:.1} ms", value * 1_000.0)
-}
-
-struct AvailableFormatter {
-    matchers: Vec<Box<dyn Matcher>>,
-    formatter: Arc<dyn Formatter>,
-}
-
-impl AvailableFormatter {
-    fn is_match(&self, diagnostic: &Diagnostic) -> bool {
-        self.matchers.iter().any(|m| (m)(diagnostic))
+impl DiagnosticState {
+    fn new(diagnostic: &Diagnostic) -> Self {
+        Self {
+            name: diagnostic.name.clone(),
+            suffix: diagnostic.suffix.clone(),
+            measurements: VecDeque::default(),
+        }
     }
 }
 
@@ -182,13 +142,6 @@ impl Plugin for DiagnosticVisualizerPlugin {
         app.insert_resource(DiagnosticVisualizerState {
             timer: Timer::new(self.wait_duration, true),
             filter: self.filter.clone(),
-            default_formatter: Arc::new(default_formatter),
-            available_formatters: vec![AvailableFormatter {
-                matchers: vec![Box::new(|d: &Diagnostic| {
-                    d.id == bevy::diagnostic::FrameTimeDiagnosticsPlugin::FRAME_TIME
-                })],
-                formatter: Arc::new(format_secs_as_ms),
-            }],
             diagnostic_states: HashMap::default(),
         })
         .add_system_to_stage(
@@ -208,25 +161,33 @@ fn update_diagnostic_visualizer_state_system(
 ) {
     let DiagnosticVisualizerState {
         diagnostic_states,
-        available_formatters,
-        default_formatter,
         filter,
         timer,
         ..
     } = state.as_mut();
     let is_tick_finished = timer.tick(time.delta()).finished();
-    if is_tick_finished {
-        diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.is_enabled)
-            .filter(|diagnostic| filter.should_include(&diagnostic.id))
-            .for_each(|diagnostic| {
-                let state = diagnostic_states.entry(diagnostic.id).or_insert_with(|| {
-                    new_state(available_formatters, default_formatter, diagnostic)
-                });
-                track_diagnostic(diagnostic, state);
-            });
+    if !is_tick_finished {
+        return;
     }
+
+    // Remove diagnostic states for diagnostics that have been removed, disabled, or filtered.
+    diagnostic_states.retain(|id, _state| {
+        diagnostics.get(*id).map_or(false, |diagnostic| {
+            diagnostic.is_enabled && filter.should_include(id)
+        })
+    });
+
+    // Update diagnostic states for diagnostics that are enabled and not filtered.
+    diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.is_enabled)
+        .filter(|diagnostic| filter.should_include(&diagnostic.id))
+        .for_each(|diagnostic| {
+            let state = diagnostic_states
+                .entry(diagnostic.id)
+                .or_insert_with(|| DiagnosticState::new(diagnostic));
+            track_diagnostic(diagnostic, state);
+        });
 }
 
 fn track_diagnostic(diagnostic: &Diagnostic, state: &mut DiagnosticState) {

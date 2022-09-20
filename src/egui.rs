@@ -68,11 +68,7 @@ fn plot_diagnostic(diagnostic_state: &DiagnosticState, ui: &mut Ui, style: &Styl
 }
 
 fn show_graph(ui: &mut Ui, style: &Style, state: &DiagnosticState) {
-    let DiagnosticState {
-        formatter,
-        measurements,
-        ..
-    } = state;
+    let DiagnosticState { measurements, .. } = state;
 
     let values = measurements.as_slices().0;
 
@@ -88,7 +84,7 @@ fn show_graph(ui: &mut Ui, style: &Style, state: &DiagnosticState) {
 
         let spacing_x = ui.spacing().item_spacing.x;
 
-        let last_text: WidgetText = formatter(*last_value).into();
+        let last_text: WidgetText = format_value(*last_value, &state.suffix).into();
         let galley = last_text.into_galley(ui, Some(false), f32::INFINITY, TextStyle::Button);
         let (outer_rect, _) = ui.allocate_exact_size(
             Vec2::new(style.width + galley.size().x + spacing_x, style.height),
@@ -128,7 +124,7 @@ fn show_graph(ui: &mut Ui, style: &Style, state: &DiagnosticState) {
 
         // Max value
         {
-            let text: WidgetText = format!("max: {}", formatter(max)).into();
+            let text: WidgetText = format!("max: {}", format_value(max, &state.suffix)).into();
             let galley = text.into_galley(ui, Some(false), f32::INFINITY, TextStyle::Button);
             let text_pos =
                 rect.left_top() + Vec2::new(0.0, galley.size().y / 2.) + vec2(spacing_x, 0.0);
@@ -141,7 +137,7 @@ fn show_graph(ui: &mut Ui, style: &Style, state: &DiagnosticState) {
 
         // Min value
         {
-            let text: WidgetText = format!("min: {}", formatter(min)).into();
+            let text: WidgetText = format!("min: {}", format_value(min, &state.suffix)).into();
             let galley = text.into_galley(ui, Some(false), f32::INFINITY, TextStyle::Button);
             let text_pos =
                 rect.left_bottom() - Vec2::new(0.0, galley.size().y * 1.5) + vec2(spacing_x, 0.0);
@@ -152,4 +148,8 @@ fn show_graph(ui: &mut Ui, style: &Style, state: &DiagnosticState) {
             );
         }
     });
+}
+
+fn format_value(value: f64, suffix: &str) -> String {
+    format!("{value:>.6}{suffix:}")
 }
