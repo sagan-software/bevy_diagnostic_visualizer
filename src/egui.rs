@@ -21,7 +21,7 @@ impl Plugin for DiagnosticVisualizerEguiPlugin {
             .add_system_to_stage(CoreStage::PostUpdate, plot_diagnostics_system);
     }
 }
-
+#[derive(Resource)]
 struct Style {
     text_color: Color32,
     rectangle_stroke: Stroke,
@@ -42,6 +42,7 @@ impl Default for Style {
     }
 }
 
+#[derive(Resource)]
 struct IsOpenState(bool);
 
 #[allow(clippy::needless_pass_by_value)]
