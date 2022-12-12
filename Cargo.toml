@@ -1,8 +1,13 @@
 [package]
 name = "bevy_diagnostic_visualizer"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-categories = ["development-tools::debugging", "development-tools::profiling", "game-development", "visualization"]
+categories = [
+    "development-tools::debugging",
+    "development-tools::profiling",
+    "game-development",
+    "visualization",
+]
 description = "Visualizations for Bevy game engine diagnostics"
 exclude = ["assets/", ".github/"]
 keywords = ["bevy", "diagnostic", "graph", "chart", "gamedev"]
@@ -11,15 +16,15 @@ readme = "README.md"
 repository = "https://github.com/sagan-software/bevy_diagnostic_visualizer"
 
 [dependencies]
-bevy = { version = "0.8.1", default-features = false }
-bevy_egui = { version = "0.16.0", default-features = false, optional = true }
+bevy = { version = "0.9.1", default-features = false }
+bevy_egui = { version = "0.18.0", default-features = false, optional = true }
 
 [features]
 default = ["bevy_egui"]
 
 [dev-dependencies]
-bevy = { version = "0.8.1", default-features = true }
-bevy_egui = { version = "0.16.0", default-features = true }
+bevy = { version = "0.9.1", default-features = true }
+bevy_egui = { version = "0.18.0", default-features = true }
 
 # Enable high optimizations for dependencies (incl. Bevy), but not for our code:
 [profile.dev.package."*"]

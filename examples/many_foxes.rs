@@ -1,37 +1,41 @@
 //! Loads animations from a skinned glTF, spawns many of them, and plays the
 //! animation to stress test skinned meshes.
 
-use bevy::{
-    diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
-    prelude::*,
-    window::PresentMode,
-};
+use bevy::{diagnostic::FrameTimeDiagnosticsPlugin, prelude::*, window::PresentMode};
 use bevy_diagnostic_visualizer::DiagnosticVisualizerPlugin;
 
-struct Foxes {
+#[derive(Debug, Resource)]
+pub struct Foxes {
     count: usize,
     speed: f32,
     moving: bool,
 }
 
-fn main() {
-    App::new()
-        .insert_resource(WindowDescriptor {
-            title: "🦊🦊🦊 Many Foxes! 🦊🦊🦊".to_string(),
-            present_mode: PresentMode::AutoNoVsync,
-            ..default()
-        })
-        .add_plugins(DefaultPlugins)
-        .add_plugin(FrameTimeDiagnosticsPlugin)
-        .add_plugin(LogDiagnosticsPlugin::default())
-        .add_plugin(DiagnosticVisualizerPlugin::default())
-        .insert_resource(Foxes {
+impl Default for Foxes {
+    fn default() -> Self {
+        Self {
             count: std::env::args()
                 .nth(1)
                 .map_or(1000, |s| s.parse::<usize>().unwrap()),
             speed: 2.0,
             moving: true,
-        })
+        }
+    }
+}
+
+fn main() {
+    App::new()
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            window: WindowDescriptor {
+                title: "🦊🦊🦊 Many Foxes! 🦊🦊🦊".to_string(),
+                present_mode: PresentMode::AutoNoVsync,
+                ..default()
+            },
+            ..default()
+        }))
+        .add_plugin(FrameTimeDiagnosticsPlugin)
+        .add_plugin(DiagnosticVisualizerPlugin::default())
+        .insert_resource(Foxes::default())
         .insert_resource(AmbientLight {
             color: Color::WHITE,
             brightness: 1.0,
@@ -43,6 +47,7 @@ fn main() {
         .run();
 }
 
+#[derive(Resource)]
 struct Animations(Vec<Handle<AnimationClip>>);
 
 const RING_SPACING: f32 = 2.0;
@@ -106,7 +111,7 @@ fn setup(
     while foxes_remaining > 0 {
         let (base_rotation, ring_direction) = ring_directions[ring_index % 2];
         let ring_parent = commands
-            .spawn_bundle((
+            .spawn((
                 Transform::default(),
                 GlobalTransform::default(),
                 Visibility::default(),
@@ -126,7 +131,7 @@ fn setup(
             let (x, z) = (radius * c, radius * s);
 
             commands.entity(ring_parent).with_children(|builder| {
-                builder.spawn_bundle(SceneBundle {
+                builder.spawn(SceneBundle {
                     scene: fox_handle.clone(),
                     transform: Transform::from_xyz(x as f32, 0.0, z as f32)
                         .with_scale(Vec3::splat(0.01))
@@ -148,21 +153,21 @@ fn setup(
         radius * 0.5 * zoom,
         radius * 1.5 * zoom,
     );
-    commands.spawn_bundle(Camera3dBundle {
+    commands.spawn(Camera3dBundle {
         transform: Transform::from_translation(translation)
             .looking_at(0.2 * Vec3::new(translation.x, 0.0, translation.z), Vec3::Y),
         ..default()
     });
 
     // Plane
-    commands.spawn_bundle(PbrBundle {
+    commands.spawn(PbrBundle {
         mesh: meshes.add(Mesh::from(shape::Plane { size: 500000.0 })),
         material: materials.add(Color::rgb(0.3, 0.5, 0.3).into()),
         ..default()
     });
 
     // Light
-    commands.spawn_bundle(DirectionalLightBundle {
+    commands.spawn(DirectionalLightBundle {
         transform: Transform::from_rotation(Quat::from_euler(
             EulerRot::ZYX,
             0.0,

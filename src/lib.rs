@@ -115,6 +115,8 @@ impl DiagnosticVisualizerPlugin {
     }
 }
 
+/// Manage the state of the diagnostic visualizer
+#[derive(Resource)]
 struct DiagnosticVisualizerState {
     timer: Timer,
     filter: DiagnosticIds,
@@ -140,7 +142,7 @@ impl DiagnosticState {
 impl Plugin for DiagnosticVisualizerPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(DiagnosticVisualizerState {
-            timer: Timer::new(self.wait_duration, true),
+            timer: Timer::new(self.wait_duration, TimerMode::Repeating),
             filter: self.filter.clone(),
             diagnostic_states: HashMap::default(),
         })
